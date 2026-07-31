@@ -1,0 +1,5 @@
+PyQt6>=6.5.0
+pygame>=2.5.0
+matplotlib>=3.7.0
+numpy>=1.24.0
+PyInstaller>=6.0.0
