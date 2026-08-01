@@ -11,7 +11,7 @@ from PyQt6.QtWidgets import (
     QSlider, QCheckBox, QGroupBox, QGridLayout,
     QFileDialog, QMessageBox, QLineEdit, QScrollArea,
 )
-from PyQt6.QtCore import Qt
+from PyQt6.QtCore import Qt, QTimer
 
 from config.settings import AMBIENT_SOUNDS_DIR
 from core.music_player import MusicPlayer
@@ -61,6 +61,9 @@ class MusicWidget(QWidget):
         left.addWidget(QLabel("Playlist:"))
         self._playlist_widget = QListWidget()
         self._playlist_widget.setMaximumHeight(200)
+        self._playlist_widget.setSelectionMode(
+            QListWidget.SelectionMode.ExtendedSelection
+        )
         self._playlist_widget.doubleClicked.connect(self._on_playlist_double_click)
         left.addWidget(self._playlist_widget)
 
@@ -68,7 +71,7 @@ class MusicWidget(QWidget):
         ctrl_row = QHBoxLayout()
         self._prev_btn = QPushButton("\u23ee")  # ⏮
         self._prev_btn.setToolTip("Previous")
-        self._prev_btn.clicked.connect(self._player.prev_track)
+        self._prev_btn.clicked.connect(self._on_prev_clicked)
         ctrl_row.addWidget(self._prev_btn)
 
         self._play_btn = QPushButton("\u25b6")  # ▶
@@ -83,12 +86,12 @@ class MusicWidget(QWidget):
 
         self._stop_btn = QPushButton("\u23f9")  # ⏹
         self._stop_btn.setToolTip("Stop")
-        self._stop_btn.clicked.connect(self._player.stop_music)
+        self._stop_btn.clicked.connect(self._on_stop_clicked)
         ctrl_row.addWidget(self._stop_btn)
 
         self._next_btn = QPushButton("\u23ed")  # ⏭
         self._next_btn.setToolTip("Next")
-        self._next_btn.clicked.connect(self._player.next_track)
+        self._next_btn.clicked.connect(self._on_next_clicked)
         ctrl_row.addWidget(self._next_btn)
         left.addLayout(ctrl_row)
 
@@ -128,10 +131,37 @@ class MusicWidget(QWidget):
         add_files_btn.clicked.connect(self._add_files)
         mgmt_row.addWidget(add_files_btn)
 
-        remove_btn = QPushButton("Remove")
+        select_all_btn = QPushButton("Select All")
+        select_all_btn.setToolTip("Select every track in the playlist")
+        select_all_btn.clicked.connect(self._select_all)
+        mgmt_row.addWidget(select_all_btn)
+
+        remove_btn = QPushButton("Remove Selected")
+        remove_btn.setToolTip(
+            "Remove all selected tracks (Ctrl/Shift-click to select multiple)"
+        )
         remove_btn.clicked.connect(self._remove_selected)
         mgmt_row.addWidget(remove_btn)
         left.addLayout(mgmt_row)
+
+        # Second row: batch operations
+        batch_row = QHBoxLayout()
+        clear_btn = QPushButton("Clear Playlist")
+        clear_btn.setToolTip("Remove every track from the playlist")
+        clear_btn.clicked.connect(self._clear_playlist)
+        batch_row.addWidget(clear_btn)
+
+        hint_lbl = QLabel("Select multiple with Ctrl/Shift-click")
+        hint_lbl.setStyleSheet("color: #868e96; font-size: 11px;")
+        hint_lbl.setAlignment(Qt.AlignmentFlag.AlignVCenter)
+        batch_row.addWidget(hint_lbl, 1)
+        left.addLayout(batch_row)
+
+        # Selection-follow timer: keeps the highlight on the playing track
+        # (covers next/prev, natural track end, double-click).
+        self._sync_timer = QTimer(self)
+        self._sync_timer.timeout.connect(self._sync_playlist_selection)
+        self._sync_timer.start(500)
 
         layout.addLayout(left, 2)
 
@@ -244,16 +274,51 @@ class MusicWidget(QWidget):
     # ── Music controls ────────────────────────────────────────────────
 
     def _on_play_clicked(self) -> None:
-        if self._player.is_music_playing:
-            self._player.pause_music()
-            return
-        if self._player.current_track_index < 0:
-            self._player.play_music(0)
-        else:
+        """Toggle play/pause, or start playing when stopped."""
+        if self._player.is_music_paused:
+            # Paused → resume from where it stopped
             self._player.resume_music()
+        elif self._player.is_music_playing:
+            # Playing → pause
+            self._player.pause_music()
+        else:
+            # Stopped → start (first track, or replay current index)
+            if self._player.current_track_index < 0:
+                self._player.play_music(0)
+            else:
+                self._player.play_music()
+        self._sync_playlist_selection()
+
+    def _on_prev_clicked(self) -> None:
+        self._player.prev_track()
+        self._sync_playlist_selection()
+
+    def _on_next_clicked(self) -> None:
+        self._player.next_track()
+        self._sync_playlist_selection()
+
+    def _on_stop_clicked(self) -> None:
+        self._player.stop_music()
+        self._sync_playlist_selection()
 
     def _on_playlist_double_click(self, index) -> None:
         self._player.play_music(index.row())
+        self._sync_playlist_selection()
+
+    def _sync_playlist_selection(self) -> None:
+        """
+        Highlight the row matching the currently playing track.
+        Called after every transport action and periodically by a timer,
+        so the highlight follows next/prev, double-clicks, and natural
+        track ends.
+        """
+        idx = self._player.current_track_index
+        if idx < 0:
+            if self._playlist_widget.currentRow() != -1:
+                self._playlist_widget.clearSelection()
+                self._playlist_widget.setCurrentRow(-1)
+        elif self._playlist_widget.currentRow() != idx:
+            self._playlist_widget.setCurrentRow(idx)
         self._update_now_playing()
 
     def _on_shuffle_toggled(self, checked: bool) -> None:
@@ -318,11 +383,61 @@ class MusicWidget(QWidget):
                 for path in files:
                     self._db.add_track(self._playlist_id, path)
 
+    def _select_all(self) -> None:
+        """Select every row in the playlist (for batch operations)."""
+        self._playlist_widget.selectAll()
+
     def _remove_selected(self) -> None:
-        row = self._playlist_widget.currentRow()
-        if row >= 0:
-            self._player.remove_from_playlist(row)
-            self._refresh_playlist_ui()
+        """Remove all selected tracks (batch) from the playlist and the DB."""
+        selected = self._playlist_widget.selectedItems()
+        if not selected:
+            QMessageBox.information(
+                self, "Nothing Selected",
+                "Select one or more tracks first "
+                "(Ctrl/Shift-click to select multiple)."
+            )
+            return
+        indexes = sorted({self._playlist_widget.row(item) for item in selected},
+                         reverse=True)
+        # Capture file paths before removal so we can clean the database
+        paths = [self._player.playlist[r] for r in indexes if r >= 0]
+
+        reply = QMessageBox.question(
+            self, "Remove Tracks",
+            f"Remove {len(indexes)} selected track(s) from the playlist?",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+        )
+        if reply != QMessageBox.StandardButton.Yes:
+            return
+
+        self._player.remove_from_playlist(indexes)
+        # Persist the removal so tracks don't reappear after restart
+        if self._playlist_id:
+            for path in paths:
+                self._db.remove_track_by_path(self._playlist_id, path)
+
+        self._refresh_playlist_ui()
+        self._sync_playlist_selection()
+
+    def _clear_playlist(self) -> None:
+        """Remove every track from the playlist and the database."""
+        if not self._player.playlist:
+            return
+        reply = QMessageBox.question(
+            self, "Clear Playlist",
+            f"Remove all {len(self._player.playlist)} tracks from the playlist?",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+        )
+        if reply != QMessageBox.StandardButton.Yes:
+            return
+
+        self._player.remove_from_playlist(
+            list(range(len(self._player.playlist))))
+        if self._playlist_id:
+            self._db.clear_playlist_tracks(self._playlist_id)
+
+        self._refresh_playlist_ui()
+        self._sync_playlist_selection()
 
     def _ensure_playlist(self) -> None:
         if self._playlist_id is not None:
@@ -372,4 +487,4 @@ class MusicWidget(QWidget):
         self._db.set_setting("ambient_volume", str(value))
 
     def refresh_on_navigate(self) -> None:
-        self._update_now_playing()
+        self._sync_playlist_selection()

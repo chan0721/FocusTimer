@@ -354,6 +354,15 @@ class Database:
         cur.execute("DELETE FROM playlist_tracks WHERE id = ?", (track_id,))
         self.conn.commit()
 
+    def remove_track_by_path(self, playlist_id: int, file_path: str) -> None:
+        """Remove a track from a playlist by its file path (for batch removal)."""
+        cur = self.conn.cursor()
+        cur.execute(
+            "DELETE FROM playlist_tracks WHERE playlist_id = ? AND file_path = ?",
+            (playlist_id, file_path),
+        )
+        self.conn.commit()
+
     def clear_playlist_tracks(self, playlist_id: int) -> None:
         cur = self.conn.cursor()
         cur.execute(

@@ -1,11 +1,19 @@
 """
 Audio playback engine wrapping pygame.mixer.
-Handles music (MP3/FLAC/WAV/etc.) and ambient sound loops with independent volume.
+
+Design notes (important for reliability):
+  * Track end is detected by POLLING the channel state (Channel.get_busy)
+    instead of pygame events. Pygame end-of-track events were unreliable:
+    stale events could advance past the user's selection, and multiple
+    queued events caused tracks to be skipped.
+  * The currently playing Sound is kept in a strong reference
+    (self._current_sound) so pygame never drops the audio mid-play.
+  * The paused state is tracked internally (pygame has no
+    Channel.get_paused()).
 """
 
 import os
 import random
-from typing import Optional
 
 import pygame.mixer
 
@@ -34,15 +42,14 @@ class MusicPlayer:
         self._repeat = False
         self._shuffle = False
 
+        self._music_paused = False   # our own pause-state tracking
+        self._expect_playing = False # True between play() and natural end
+        self._current_sound = None   # strong reference to the playing Sound
+
         # Track which ambient sound is playing on each channel: channel → sound_name
         self._ambient_active: dict[int, str] = {}
         # Per-sound volume levels (0.0 - 1.0)
         self._ambient_volumes: dict[str, float] = {}
-
-        # Set up channel end-of-track callback
-        pygame.mixer.Channel(MUSIC_CHANNEL).set_endevent(
-            pygame.USEREVENT + 1
-        )
 
     # ── Music playback ────────────────────────────────────────────────
 
@@ -58,14 +65,31 @@ class MusicPlayer:
             if os.path.isfile(p) and p not in self._playlist:
                 self._playlist.append(p)
 
-    def remove_from_playlist(self, index: int) -> None:
-        if 0 <= index < len(self._playlist):
-            was_current = index == self._playlist_index
-            self._playlist.pop(index)
-            if was_current:
-                self.stop_music()
-            elif index < self._playlist_index:
-                self._playlist_index -= 1
+    def remove_from_playlist(self, indexes: list[int]) -> None:
+        """
+        Remove tracks by a (possibly unsorted) list of playlist indexes.
+        Handles the currently playing track and adjusts the index correctly.
+        """
+        if not indexes:
+            return
+        indexes = sorted(set(indexes), reverse=True)
+        current = self._playlist_index
+        removed_current = False
+
+        for idx in indexes:
+            if not (0 <= idx < len(self._playlist)):
+                continue
+            if idx == current:
+                removed_current = True
+            elif idx < current:
+                current -= 1
+            self._playlist.pop(idx)
+
+        if removed_current:
+            self.stop_music()
+            self._playlist_index = -1
+        else:
+            self._playlist_index = current
 
     @property
     def playlist(self) -> list[str]:
@@ -84,9 +108,10 @@ class MusicPlayer:
         return ""
 
     def play_music(self, index: int | None = None) -> None:
-        """Start playing from the given playlist index, or resume current."""
-        music_ch = pygame.mixer.Channel(MUSIC_CHANNEL)
-
+        """
+        Start playing the track at `index` (or the current track if None).
+        Corrupt/unplayable files are skipped automatically.
+        """
         if index is not None:
             if 0 <= index < len(self._playlist):
                 self._playlist_index = index
@@ -100,30 +125,62 @@ class MusicPlayer:
                 self._playlist_index = 0
 
         if self._playlist_index < 0 or self._playlist_index >= len(self._playlist):
+            self._expect_playing = False
             return
 
+        self._try_play_current(allow_skip=True)
+
+    def _try_play_current(self, allow_skip: bool = False, depth: int = 0) -> None:
+        """Load and play the track at _playlist_index; skip broken files."""
+        if depth > len(self._playlist):  # playlist fully unplayable — give up
+            self._expect_playing = False
+            self._current_sound = None
+            return
+
+        ch = pygame.mixer.Channel(MUSIC_CHANNEL)
         try:
             sound = pygame.mixer.Sound(self._playlist[self._playlist_index])
-            music_ch.play(sound, loops=0)
-            music_ch.set_volume(self._music_volume)
         except pygame.error as exc:
-            print(f"MusicPlayer: cannot play {self._playlist[self._playlist_index]}: {exc}")
-            self._advance_track()
+            print(f"MusicPlayer: cannot load "
+                  f"{self._playlist[self._playlist_index]}: {exc}")
+            if allow_skip:
+                self._playlist_index = (
+                    self._playlist_index + 1) % len(self._playlist)
+                self._try_play_current(allow_skip=True, depth=depth + 1)
+            else:
+                self._expect_playing = False
+            return
+
+        # Keep a strong reference so pygame does not drop the sound mid-play
+        self._current_sound = sound
+        # stop() fully resets the channel (clears paused state),
+        # then play; unpause() as a safety net.
+        ch.stop()
+        ch.play(sound, loops=0)
+        ch.unpause()
+        ch.set_volume(self._music_volume)
+        self._music_paused = False
+        self._expect_playing = True
 
     def pause_music(self) -> None:
         pygame.mixer.Channel(MUSIC_CHANNEL).pause()
+        self._music_paused = True
 
     def resume_music(self) -> None:
-        music_ch = pygame.mixer.Channel(MUSIC_CHANNEL)
-        if not music_ch.get_busy():
-            # If nothing is loaded, start from the current track
+        if self._music_paused:
+            pygame.mixer.Channel(MUSIC_CHANNEL).unpause()
+            self._music_paused = False
+            return
+        # Not paused but stopped — start the current track over
+        if not pygame.mixer.Channel(MUSIC_CHANNEL).get_busy():
             if self._playlist_index >= 0:
                 self.play_music()
-        else:
-            music_ch.unpause()
 
     def stop_music(self) -> None:
         pygame.mixer.Channel(MUSIC_CHANNEL).stop()
+        self._music_paused = False
+        self._expect_playing = False
+        self._current_sound = None
 
     def next_track(self) -> None:
         self._advance_track()
@@ -140,10 +197,10 @@ class MusicPlayer:
     def _advance_track(self) -> None:
         """Move to the next track based on repeat/shuffle settings."""
         if not self._playlist:
+            self._expect_playing = False
             return
         if self._repeat:
-            # Replay the same track
-            self.play_music()
+            self.play_music()  # replay the same track
             return
         if self._shuffle:
             self._playlist_index = random.randint(0, len(self._playlist) - 1)
@@ -151,9 +208,27 @@ class MusicPlayer:
             self._playlist_index = (self._playlist_index + 1) % len(self._playlist)
         self.play_music()
 
+    def poll(self) -> None:
+        """
+        Call periodically from the UI event loop (e.g. every 200 ms).
+        Detects when the current track has ended naturally and advances.
+        Replaces the old (unreliable) pygame end-of-track event mechanism.
+        """
+        if self._music_paused or not self._expect_playing:
+            return
+        if not pygame.mixer.Channel(MUSIC_CHANNEL).get_busy():
+            self._expect_playing = False
+            self._advance_track()
+
     @property
     def is_music_playing(self) -> bool:
-        return pygame.mixer.Channel(MUSIC_CHANNEL).get_busy()
+        """True if a track is loaded on the channel and audible."""
+        return pygame.mixer.Channel(MUSIC_CHANNEL).get_busy() and not self._music_paused
+
+    @property
+    def is_music_paused(self) -> bool:
+        """True if a track is loaded but paused."""
+        return self._music_paused
 
     @property
     def repeat(self) -> bool:
@@ -250,15 +325,6 @@ class MusicPlayer:
 
     def is_ambient_playing(self, sound_name: str) -> bool:
         return sound_name in self._ambient_active.values()
-
-    # ── Check for track-end events (call from main event loop) ────────
-
-    def process_events(self, event) -> bool:
-        """Handle pygame music-end events. Returns True if event was consumed."""
-        if event.type == pygame.USEREVENT + 1:
-            self._advance_track()
-            return True
-        return False
 
     # ── Cleanup ────────────────────────────────────────────────────────
 

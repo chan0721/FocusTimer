@@ -206,13 +206,15 @@ class MainWindow(QMainWindow):
             completed=True,
         )
 
-    # ── Pygame event loop integration ─────────────────────────────────
+    # ── Music player polling (track-end detection) ─────────────────────
 
     def _poll_pygame_events(self) -> None:
-        """Process pygame events (e.g., music track-end) in the Qt event loop."""
+        """
+        Let the music player detect finished tracks.
+        Uses channel-state polling instead of pygame events (more reliable).
+        """
         try:
-            for event in pygame.event.get():
-                self._music_player.process_events(event)
+            self._music_player.poll()
         except pygame.error:
             pass  # pygame not fully initialized — non-fatal
 
