@@ -33,14 +33,14 @@ A minimalist Windows desktop focus timer for deep work and daily study habits �
 
 | Feature | Description |
 |---|---|
-| **Focus Timer** | Preset durations (25 / 50 / 90 / 120 / 180 min) plus a custom spinbox (1–600 min). Start, pause, resume, reset. |
+| **Focus Timer** | Preset durations (25 / 50 / 90 / 120 / 180 min) plus a custom spinbox (1–600 min). Start, pause, resume, reset, and **save partial sessions**. |
 | **Pomodoro Mode** | Toggleable. Configurable focus duration, break duration, and number of cycles. Auto-transitions between phases. |
 | **Daily Goal** | Set a daily focus target (30 min – 12 h). A progress bar on the timer page tracks today's progress. |
 | **Statistics** | Bar chart of daily focus time, weekly average, session count, and a GitHub-style calendar heatmap. |
 | **Session History** | Every completed session is logged with date, time, duration, and task description. Filter by date range and search by keyword. |
 | **Quotes** | 20 built-in inspirational quotes. Add, edit, and delete your own. Displayed on the timer page during sessions. |
 | **Music Player** | Play local `.mp3`, `.wav`, `.flac`, `.m4a`, `.ogg` files. Browse folders, build playlists, shuffle, repeat, volume control. |
-| **Ambient Sound Mixer** | Place your own ambient audio files in `assets/sounds/` — they appear as checkboxes with independent volume sliders. Mix multiple sounds simultaneously (up to 7). |
+| **Ambient Sound Mixer** | The repo ships with 8 ambient tracks (brown noise, campfire, forest, rain, river, train, waves, wind). Replace them with your own files — just drop `.mp3`/`.wav`/`.ogg` into `assets/sounds/`. Each sound gets its own checkbox and volume slider. Mix up to 7 simultaneously. |
 | **Light & Dark Themes** | Switch in Settings (restart required). |
 | **Fully Offline** | No internet connection needed. No accounts, no telemetry. |
 
@@ -109,6 +109,11 @@ On first launch the app creates:
 - `focustimer.db` — SQLite database (session history, settings, quotes, playlists)
 - `assets/sounds/__completion_chime.wav` — notification sound played when a session ends
 
+> **Where data is stored:** all data lives in the application directory —
+> the project root when running from source, or the folder containing
+> `FocusTimer.exe` when running the packaged build. This ensures your
+> history and settings survive restarts.
+
 ---
 
 ## How to Use
@@ -122,6 +127,7 @@ The main screen. This is where you start focus sessions.
 3. **Enable Pomodoro** (optional) — check the box and configure focus/break durations and the number of cycles.
 4. **Click "START FOCUS"** — the countdown begins. While running you can pause or reset.
 5. **When the timer ends** — a chime plays and the session is saved to history automatically. If Pomodoro is enabled, it auto-transitions to the break phase.
+6. **Save a partial session** — pause at any point, then click **Save**. The time already focused (e.g., 21m 30s of a 30m goal) is recorded toward today's goal and the timer resets. A confirmation dialog shows the exact time being saved.
 
 The **progress bar** at the top shows today's completed time vs. your daily goal (set in Settings).
 
@@ -237,6 +243,52 @@ The output is at `dist/FocusTimer.exe` (~150 MB due to bundled Qt libraries).
 - `--windowed` — no console window
 - `--icon assets/icon.ico` — custom application icon
 - Embeds all Python modules, Qt binaries, and `assets/` directory
+
+---
+
+## Using the Executable (Release Build)
+
+**The `.exe` is fully self-contained.** It runs without Python, the source
+code, or any other files in the folder. Download it, double-click it, done.
+
+### What happens on first launch
+
+The app creates a small set of **user data files next to the `.exe`**:
+
+```
+📁 YourFolder/
+   ├── FocusTimer.exe          ← the single file you downloaded
+   ├── focustimer.db           ← created on first run (your history & settings)
+   └── assets/
+       └── sounds/             ← created on first run (default ambient tracks
+           ├── Brown-Noise.mp3    are copied here from the bundle so you can
+           ├── Rain.mp3           see, replace, or delete them)
+           └── __completion_chime.wav
+```
+
+> These files appear **only after you run the exe once**. They are safe to
+> delete — the app recreates them. Deleting `focustimer.db` resets your
+> history and settings.
+
+### How to add your own ambient sounds
+
+1. In the folder next to the exe, open `assets/sounds/`
+2. Drop in your `.mp3` / `.wav` / `.ogg` files
+3. Launch the app → **Music** tab → click **Refresh**
+
+Each file becomes a checkbox with its own volume slider. You can mix up to
+7 sounds at once.
+
+### Why extra files appear (and why it's good)
+
+- The **database** must live on disk somewhere permanent — placing it next
+  to the exe means your history survives restarts and is easy to back up.
+- The **sounds folder** is where you add your own audio without rebuilding
+  the app.
+
+**It is NOT required** to keep the exe in a special location or carry the
+source code around — put the exe anywhere you like (Desktop, USB stick,
+Downloads folder) and it will work standalone.
 
 ---
 

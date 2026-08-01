@@ -155,6 +155,14 @@ class TimerWidget(QWidget):
         self._pause_btn.setVisible(False)
         btn_row.addWidget(self._pause_btn)
 
+        self._save_btn = QPushButton("Save")
+        self._save_btn.setToolTip(
+            "Save the time already focused (shown when paused) and reset the timer."
+        )
+        self._save_btn.setObjectName("primaryButton")
+        self._save_btn.setVisible(False)
+        btn_row.addWidget(self._save_btn)
+
         self._reset_btn = QPushButton("Reset")
         self._reset_btn.setVisible(False)
         btn_row.addWidget(self._reset_btn)
@@ -170,6 +178,7 @@ class TimerWidget(QWidget):
     def _connect_signals(self) -> None:
         self._start_btn.clicked.connect(self._on_start)
         self._pause_btn.clicked.connect(self._on_pause)
+        self._save_btn.clicked.connect(self._on_save)
         self._reset_btn.clicked.connect(self._on_reset)
         self._preset_combo.currentIndexChanged.connect(
             lambda: self._custom_spin.setValue(self._preset_combo.currentData())
@@ -213,7 +222,8 @@ class TimerWidget(QWidget):
             self._timer.resume()
             self._pause_btn.setText("Pause")
 
-    def _on_reset(self) -> None:
+    def _reset_to_idle(self) -> None:
+        """Stop the timer and restore the configured initial duration."""
         self._timer.reset()
         minutes = self._get_duration_minutes()
         self._timer.set_duration(minutes * 60)
@@ -221,6 +231,43 @@ class TimerWidget(QWidget):
         self._phase_label.setVisible(False)
         self._set_config_enabled(True)
         self._update_progress_display()
+
+    def _on_reset(self) -> None:
+        self._reset_to_idle()
+
+    def _on_save(self) -> None:
+        """Save the time already focused (elapsed) as a completed session."""
+        if self._timer.state != TimerState.PAUSED:
+            return
+
+        # Only save focus time, never break time
+        if self._timer.current_phase != PomodoroPhase.FOCUS:
+            QMessageBox.information(
+                self, "Cannot Save",
+                "Break time is not counted toward your focus goal."
+            )
+            return
+
+        elapsed = self._timer.elapsed
+        if elapsed < 1:
+            return  # nothing meaningful to save
+
+        minutes = elapsed // 60
+        seconds = elapsed % 60
+        task_desc = self._task_input.text().strip()
+
+        reply = QMessageBox.question(
+            self, "Save Session",
+            f"Save {minutes}m {seconds}s of focused time as a completed session?\n"
+            + (f'Task: "{task_desc}"\n' if task_desc else ""),
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+        )
+        if reply != QMessageBox.StandardButton.Yes:
+            return
+
+        # Record the partial session (counts toward today's goal)
+        self.session_completed.emit(elapsed, task_desc)
+        self._reset_to_idle()
 
     def _on_tick(self, remaining: int, total: int) -> None:
         self._time_label.setText(FocusTimer.format_time(remaining))
@@ -230,15 +277,18 @@ class TimerWidget(QWidget):
             self._start_btn.setText("START FOCUS")
             self._start_btn.setVisible(True)
             self._pause_btn.setVisible(False)
+            self._save_btn.setVisible(False)
             self._reset_btn.setVisible(False)
             self._set_config_enabled(True)
         elif state == TimerState.RUNNING:
             self._start_btn.setVisible(False)
             self._pause_btn.setText("Pause")
             self._pause_btn.setVisible(True)
+            self._save_btn.setVisible(False)
             self._reset_btn.setVisible(True)
         elif state == TimerState.PAUSED:
             self._pause_btn.setText("Resume")
+            self._save_btn.setVisible(True)
 
     def _on_timer_finished(self) -> None:
         """A single focus (or break) period ended."""

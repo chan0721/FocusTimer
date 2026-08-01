@@ -1,21 +1,23 @@
 """
 Minimal sound helpers — only the completion chime is generated.
-Ambient sounds are user-provided .mp3/.wav files placed in assets/sounds/.
+Ambient sounds are .mp3/.wav files scanned from assets/sounds/.
+Paths are resolved via config.paths so data persists next to the .exe.
 """
 
 import os
 import wave
 import numpy as np
 
-from config.settings import AMBIENT_SOUNDS_DIR
+from config.paths import get_app_base_dir, get_sounds_dir
 
-# Project root-relative assets directory
-_PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-ASSETS_DIR = os.path.join(_PROJECT_ROOT, AMBIENT_SOUNDS_DIR)
+
+def _get_write_dir() -> str:
+    """Persistent directory for generated assets (never the bundled temp copy)."""
+    return os.path.join(get_app_base_dir(), "assets", "sounds")
 
 
 def _ensure_dir() -> None:
-    os.makedirs(ASSETS_DIR, exist_ok=True)
+    os.makedirs(_get_write_dir(), exist_ok=True)
 
 
 def _normalize(samples: np.ndarray, ceiling: float = 0.95) -> np.ndarray:
@@ -37,8 +39,8 @@ def _write_wav(filepath: str, samples: np.ndarray, sample_rate: int = 44100) -> 
 
 
 def get_sound_path(sound_name: str) -> str:
-    """Return the full path for a named asset (e.g. the completion chime)."""
-    return os.path.join(ASSETS_DIR, f"{sound_name}.wav")
+    """Persistent path for a generated asset (e.g. the completion chime)."""
+    return os.path.join(_get_write_dir(), f"{sound_name}.wav")
 
 
 def generate_completion_chime(filepath: str) -> None:
@@ -60,15 +62,20 @@ def scan_ambient_sounds() -> list[tuple[str, str]]:
     """
     Scan the ambient sounds directory for audio files.
     Returns a sorted list of (display_name, full_path) tuples.
+    Files starting with '__' (internal assets, e.g. the completion chime)
+    are excluded. Uses config.paths.get_sounds_dir(), which handles the
+    bundled-to-persistent seeding for packaged builds.
     """
     from config.settings import AMBIENT_AUDIO_EXTS
-    _ensure_dir()
+
     results = []
+    scan_dir = get_sounds_dir()
     try:
-        for fname in sorted(os.listdir(ASSETS_DIR)):
+        for fname in sorted(os.listdir(scan_dir)):
+            if fname.startswith("__"):
+                continue  # internal file
             if fname.lower().endswith(AMBIENT_AUDIO_EXTS):
-                full = os.path.join(ASSETS_DIR, fname)
-                # Display name: filename without extension, underscores → spaces
+                full = os.path.join(scan_dir, fname)
                 stem = os.path.splitext(fname)[0]
                 display = stem.replace("_", " ").replace("-", " ").title()
                 results.append((display, full))

@@ -20,6 +20,7 @@ from config.settings import (
     APP_NAME, WINDOW_MIN_WIDTH, WINDOW_MIN_HEIGHT,
     WINDOW_DEFAULT_WIDTH, WINDOW_DEFAULT_HEIGHT, SIDEBAR_WIDTH,
 )
+from config.paths import get_icon_path
 from core.timer import TimerState, FocusTimer, PomodoroPhase
 from core.music_player import MusicPlayer
 from database.database import Database
@@ -219,10 +220,7 @@ class MainWindow(QMainWindow):
 
     def _set_app_icon(self) -> None:
         """Load the application icon from assets/icon.ico."""
-        icon_path = os.path.join(
-            os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
-            "assets", "icon.ico",
-        )
+        icon_path = get_icon_path()
         if os.path.exists(icon_path):
             self.setWindowIcon(QIcon(icon_path))
 

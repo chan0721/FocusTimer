@@ -19,12 +19,12 @@ from config.settings import (
     BUILTIN_QUOTES,
     QUOTE_CHANGE_FREQUENCY,
 )
+from config.paths import get_db_path
 
 
 def _get_db_path() -> str:
-    """Return the path to the SQLite database file in the project root."""
-    base = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-    return os.path.join(base, "focustimer.db")
+    """Return the path to the SQLite database file (persistent, exe/project dir)."""
+    return get_db_path()
 
 
 class Database:
